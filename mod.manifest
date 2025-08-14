@@ -1,0 +1,13 @@
+<kcd_mod>
+  <info>
+    <name>KitSmith</name>
+    <modid>kitsmith</modid>
+    <description>Repair kit consolidator</description>
+    <author>hoskope</author>
+    <version>1.2</version>
+    <created_on>2025-08-07</created_on>
+  </info>
+  <supports>
+    <kcd_version>1.*</kcd_version>
+  </supports>
+</kcd_mod>
