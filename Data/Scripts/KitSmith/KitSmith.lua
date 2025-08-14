@@ -18,6 +18,14 @@ function KitSmith.Log(msg)
     end
 end
 
+-- 🔻 Stop polling (soft-cancel by flag; next tick won't reschedule)
+function KitSmith.StopPolling()
+    if KitSmith._pollingActive then
+        KitSmith.Log("🛑 Stopping polling loop")
+        KitSmith._pollingActive = false
+    end
+end
+
 function KitSmith.Info(msg)
     System.LogAlways("[KitSmith] " .. tostring(msg))
 end
@@ -57,13 +65,10 @@ end
 -- Event hooks
 function KitSmith.OnGameplayStarted(actionName, eventName, argTable)
     KitSmith.Info("🎮 OnGameplayStarted fired")
-    KitSmith._pollingActive = false -- Reset to ensure polling is allowed
+    -- soft-cancel any prior loop from an earlier session/config
+    KitSmith.StopPolling()
     KitSmith.Initialize(true)
-
-    if not KitSmith.config.useSleepCleanup then
-        KitSmith.Log("🔁 Restarting polling from OnGameplayStarted (savegame load)")
-        KitSmith.StartPolling()
-    end
+    -- No need to StartPolling here — Initialize() decides based on config
 end
 
 function KitSmith:onSkipTimeEvent(elementName, instanceId, eventName, argTable)
@@ -76,12 +81,13 @@ function KitSmith:onSkipTimeEvent(elementName, instanceId, eventName, argTable)
     elseif eventName == "OnHide" and KitSmith._sleeping then
         KitSmith._sleeping = false
         KitSmith._paused = false
-
         if KitSmith.config.useSleepCleanup then
             Log("Woke up → consolidating kits now")
             KitSmith.ConsolidateKits()
+            -- ensure live polling remains OFF in sleep mode
+            KitSmith.StopPolling()
         else
-            Log("Woke up → polling will resume shortly")
+            Log("Woke up → polling continues")
         end
     end
 end
@@ -103,6 +109,8 @@ function KitSmith.Initialize(fullInit)
     end
 
     if KitSmith.config.useSleepCleanup then
+        -- ensure any previous live loop is stopped
+        KitSmith.StopPolling()
         KitSmith.Log("🛏️ Sleep cleanup mode enabled — polling disabled")
     else
         KitSmith.Log("🟢 Live polling mode enabled — starting polling loop")
@@ -120,17 +128,14 @@ function KitSmith.StartPolling()
         KitSmith.Log("Polling already active, skipping")
         return
     end
-
     local ok = pcall(function()
         Script.SetTimerForFunction(KitSmith.config.pollingInterval, "KitSmith.PollingTick")
         KitSmith._pollingActive = true
         KitSmith.Log("✅ Polling loop started (live mode)")
     end)
-
     if not ok then
         KitSmith.Log("⚠ Failed to start polling")
     end
-
     KitSmith.Info(string.format("Polling active every %.1f seconds", KitSmith.config.pollingInterval))
 end
 
@@ -138,8 +143,7 @@ end
 function KitSmith.PollingTick()
     KitSmith.Log("Polling tick: paused=" .. tostring(KitSmith._paused))
     if not KitSmith._paused then
-        KitSmith.ConsolidateKits()
-        Info("KitSmith consolidation cycle completed.")
+        KitSmith.ConsolidateKits() -- summary will be logged inside the function
     else
         KitSmith.Log("Polling paused (sleeping)")
     end
@@ -209,17 +213,21 @@ function KitSmith.ConsolidateKits()
     end
 
 
+    local totalTypes, totalRemovedStacks, totalCreatedFull, totalCreatedRemainders, totalUnchanged = 0, 0, 0, 0, 0
+
     for kitName, data in pairs(kitsByType) do
+        totalTypes = totalTypes + 1
+
         local total = data.totalHealth
         local count = data.totalCount
         if count > 1 then
-            local fullKits = math.floor(total)
+            local fullKits  = math.floor(total)
             local remainder = total - fullKits
-            local newCount = fullKits + (remainder > 0 and 1 or 0)
+            local newCount  = fullKits + (remainder > 0 and 1 or 0)
 
             if newCount < count then
                 if KitSmith.config.dryRun then
-                    Info(string.format(
+                    Log(string.format(
                         "Dry-run: %s (count=%d, totalHealth=%.2f) → would create %d full kits and %s remainder kit",
                         kitName, count, total, fullKits,
                         (remainder > 0 and string.format("1 (%.2f)", remainder) or "none")
@@ -227,27 +235,42 @@ function KitSmith.ConsolidateKits()
                 else
                     Log(string.format("Removing %d original %s kits", count, kitName))
                     player.inventory:DeleteItemOfClass(data.class, count)
+                    totalRemovedStacks = totalRemovedStacks + count
 
                     for i = 1, fullKits do
                         Log("Creating 1 full kit: " .. kitName)
                         player.inventory:CreateItem(data.class, 1.0, 1)
                     end
+                    totalCreatedFull = totalCreatedFull + fullKits
 
                     if remainder > 0 then
                         Log("Creating 1 remainder kit: " .. kitName .. " with health=" .. remainder)
                         player.inventory:CreateItem(data.class, remainder, 1)
+                        totalCreatedRemainders = totalCreatedRemainders + 1
                     end
                 end
             else
-                Info(string.format(
+                -- Was already optimal
+                Log(string.format(
                     "No consolidation needed for %s (count=%d, already optimal with totalHealth=%.2f)",
                     kitName, count, total
                 ))
+                totalUnchanged = totalUnchanged + 1
             end
         else
-            Info(string.format("Keeping %s as is (only %d kit, totalHealth=%.2f)",
-                kitName, count, total))
+            Log(string.format("Keeping %s as is (only %d kit, totalHealth=%.2f)", kitName, count, total))
+            totalUnchanged = totalUnchanged + 1
         end
+    end
+
+    -- 🔚 One single summary line per pass (always-on)
+    if next(kitsByType) then
+        Info(string.format(
+            "KitSmith: consolidated %d type(s) → removedStacks=%d, createdFull=%d, remainders=%d, unchanged=%d",
+            totalTypes, totalRemovedStacks, totalCreatedFull, totalCreatedRemainders, totalUnchanged
+        ))
+    else
+        Info("KitSmith: no repair kits found to consolidate")
     end
 end
 

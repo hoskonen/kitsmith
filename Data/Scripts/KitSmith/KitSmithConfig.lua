@@ -9,7 +9,7 @@ KitSmith_Config = {
     -- Mode selection:
     -- true  = consolidate repair kits when you wake up from sleep (immersive, safest option)
     -- false = consolidate kits every X seconds while playing (live mode, QoL)
-    useSleepCleanup = true,
+    useSleepCleanup = false,
 
     -- Interval for live mode (milliseconds). Ignored if useSleepCleanup = true.
     pollingInterval = 20000, -- 20s is a good default
